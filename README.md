@@ -65,7 +65,7 @@ The solution is built with Python and includes:
 
 2. **Install dependencies**:
    ```bash
-   pip install -r requirements.txt
+   pip3 install -r requirements.txt
    ```
 
 3. **Configure environment**:
@@ -95,7 +95,7 @@ The solution is built with Python and includes:
 Execute the main script to run the complete setup:
 
 ```bash
-python main.py
+python3 main.py
 ```
 
 The script will:
