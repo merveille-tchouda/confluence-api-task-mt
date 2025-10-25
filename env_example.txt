@@ -1,0 +1,8 @@
+# Confluence Cloud API Configuration
+CONFLUENCE_URL=
+CONFLUENCE_EMAIL=
+CONFLUENCE_API_TOKEN=
+
+# Site Configuration
+SITE_NAME=
+SITE_DOMAIN=
