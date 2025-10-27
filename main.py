@@ -1,505 +1,354 @@
 """
-Confluence Cloud Setup Script
+Confluence Cloud Setup Script (final minimal)
 
-This script implements the Senior Technical Specialist take-home exercise
-for setting up a Confluence Cloud site with users, groups, spaces, and content.
+- Expects .env and user_account_mapping.json in repo root.
+- Creates group 'standard-users' (if missing), adds 4 standard users to it.
+- Creates two spaces: COLLAB and RESTRICT (if missing) with robust lookup fallback.
+- Creates a page in COLLAB with an embedded image.
+- Applies space-level permissions:
+    * COLLAB: one standard user -> space admin; other standard users -> write+read
+    * RESTRICT: site admin -> space admin; all standard users -> read-only
+- Applies a page-level read restriction to admin + one non-admin user.
 """
 
 import os
 import time
-from typing import Dict, List, Any
+import json
+from typing import Dict, Any, Optional, List
+
 from confluence_client import ConfluenceClient
 
 
 class ConfluenceSetup:
-    """Main class for setting up Confluence Cloud site."""
-    
     def __init__(self):
-        """Initialize the Confluence setup with API client."""
         self.client = ConfluenceClient()
-        self.users = {}
+        self.users: Dict[str, Dict[str, Any]] = {}
         self.group_name = "standard-users"
-        self.spaces = {}
-        self.content = {}
-    
+        self.spaces: Dict[str, Dict[str, Any]] = {}
+        self.content: Dict[str, Dict[str, Any]] = {}
+
+        # user configs (used for mapping keys + instructions)
+        self.user_configs = [
+            {'username': 'merveille', 'email': 'mmnjong@gmail.com', 'display_name': 'Administrator User', 'is_admin': True},
+            {'username': 'user1', 'email': 'user1@example.com', 'display_name': 'Standard User 1', 'is_admin': False},
+            {'username': 'user2', 'email': 'user2@example.com', 'display_name': 'Standard User 2', 'is_admin': False},
+            {'username': 'user3', 'email': 'user3@example.com', 'display_name': 'Standard User 3', 'is_admin': False},
+            {'username': 'user4', 'email': 'user4@example.com', 'display_name': 'Standard User 4', 'is_admin': False},
+        ]
+
+    def _load_user_mapping(self) -> Optional[Dict[str, str]]:
+        mapping_path = os.path.join(os.path.dirname(__file__), 'user_account_mapping.json')
+        if not os.path.exists(mapping_path):
+            return None
+        try:
+            with open(mapping_path, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+        except Exception as e:
+            print(f"❌ Failed to load user_account_mapping.json: {e}")
+        return None
+
     def setup_users(self) -> None:
         """
-        Create users as specified in the requirements:
-        - 1 administrator user
-        - 4 standard users
-        
-        Note: Users must be created manually through Atlassian admin console
-        as Confluence Cloud doesn't support direct user creation via API.
+        Load accountId mapping for users and populate self.users.
+        If mapping missing, instruct and prompt the operator to create it.
         """
-        print("🔧 Setting up users...")
-        print("⚠️  IMPORTANT: Confluence Cloud requires manual user creation.")
-        print("   Users must be created through the Atlassian admin console.")
-        print()
-        
-        # User configurations
-        user_configs = [
-            {
-                'username': 'merveille',
-                'email': 'mmnjong@gmail.com',
-                'display_name': 'Administrator User',
-                'is_admin': True
-            },
-            {
-                'username': 'user1',
-                'email': 'user1@example.com',
-                'display_name': 'Standard User 1',
-                'is_admin': False
-            },
-            {
-                'username': 'user2',
-                'email': 'user2@example.com',
-                'display_name': 'Standard User 2',
-                'is_admin': False
-            },
-            {
-                'username': 'user3',
-                'email': 'user3@example.com',
-                'display_name': 'Standard User 3',
-                'is_admin': False
-            },
-            {
-                'username': 'User 4',
-                'email': 'user4@example.com',
-                'display_name': 'Standard User 4',
-                'is_admin': False
-            }
-        ]
-        
-        print("📋 User Creation Instructions:")
-        print("=" * 50)
-        print("1. Go to your Atlassian admin console")
-        print("2. Navigate to 'User management' > 'Users'")
-        print("3. Click 'Invite users' or 'Add users'")
-        print("4. Create the following users:")
-        print()
-        
-        for i, config in enumerate(user_configs, 1):
-            print(f"User {i}: {config['display_name']}")
-            print(f"  - Username: {config['username']}")
-            print(f"  - Email: {config['email']}")
-            print(f"  - Admin privileges: {'Yes' if config['is_admin'] else 'No'}")
-            print()
-        
-        print("⏳ Please create all users manually, then press Enter to continue...")
-        input("Press Enter when all users are created...")
-        
-        # Verify users exist and add them to our tracking
-        for config in user_configs:
-            try:
-                print(f"  Verifying user: {config['username']}")
-                if self.client.check_user_exists(config['username']):
-                    user = {
-                        'id': f'user-{config["username"]}',
-                        'username': config['username'],
-                        'email': config['email'],
-                        'displayName': config['display_name'],
-                        'isAdmin': config['is_admin']
-                    }
-                    self.users[config['username']] = user
-                    print(f"  ✅ User {config['username']} verified and ready")
-                else:
-                    print(f"  ❌ User {config['username']} not found. Please create this user first.")
-                    # Continue with other users even if one fails
-                
-            except Exception as e:
-                print(f"  ❌ Failed to verify user {config['username']}: {e}")
-        
-        print(f"✅ User setup completed. {len(self.users)} users ready for setup.")
-    
+        print("🔧 Setting up users (mapping-based)...")
+        mapping = self._load_user_mapping()
+        if mapping is None:
+            print("⚠️ user_account_mapping.json not found. Please create it with email -> accountId mappings.")
+            print("Example:")
+            print(json.dumps({u['email']: "<accountId>" for u in self.user_configs}, indent=2))
+            input("Press Enter after creating user_account_mapping.json (or Ctrl+C to abort)...")
+            mapping = self._load_user_mapping()
+            if mapping is None:
+                raise SystemExit("user_account_mapping.json missing or invalid; aborting.")
+
+        found = 0
+        for cfg in self.user_configs:
+            email = cfg['email']
+            acct = mapping.get(email)
+            if acct:
+                self.users[cfg['username']] = {
+                    'accountId': acct,
+                    'email': email,
+                    'displayName': cfg['display_name'],
+                    'isAdmin': cfg['is_admin'],
+                    'username': cfg['username']
+                }
+                print(f"  ✅ mapping found: {email} -> {acct}")
+                found += 1
+            else:
+                print(f"  ⚠️ mapping missing for {email}")
+
+        print(f"✅ Users loaded: {found}/{len(self.user_configs)} (will continue with loaded users)")
+
     def setup_groups(self) -> None:
         """
-        Create group and add standard users to it.
-        Administrator is not added to the group.
+        Create group and add standard users by accountId.
         """
-        print("🔧 Setting up groups...")
-        
+        print(f"🔧 Creating/ensuring group '{self.group_name}' exists...")
         try:
-            # Create the group
-            print(f"  Creating group: {self.group_name}")
-            try:
-                group = self.client.create_group(self.group_name)
-                print(f"  ✅ Group {self.group_name} created successfully")
-            except Exception as group_error:
-                if "already exists" in str(group_error) or "Group already exists" in str(group_error):
-                    print(f"  ⚠️ Group {self.group_name} already exists - using existing group")
-                else:
-                    raise group_error
-            
-            # Add standard users to the group (exclude admin)
-            standard_users = [username for username in self.users.keys() if username != 'PepikM']
-            
-            if not standard_users:
-                print("  ⚠️ No standard users available to add to group.")
-                print("  Please ensure users are created and verified first.")
-                return
-            
-            for username in standard_users:
-                try:
-                    print(f"  Adding {username} to group {self.group_name}")
-                    self.client.add_user_to_group(self.group_name, username)
-                    print(f"  ✅ User {username} added to group successfully")
-                    time.sleep(1)  # Rate limiting
-                    
-                except Exception as e:
-                    print(f"  ❌ Failed to add {username} to group: {e}")
-            
-            print(f"✅ Group setup completed. Added {len(standard_users)} users to group.")
-            
+            grp_resp = self.client.create_group(self.group_name)
+            if isinstance(grp_resp, dict) and grp_resp.get('status') == 409:
+                print(f"  ⚠️ Group '{self.group_name}' already exists (server returned 409). Continuing.")
+            else:
+                print(f"  ✅ Group '{self.group_name}' created or acknowledged by API.")
         except Exception as e:
-            print(f"❌ Failed to setup groups: {e}")
-    
+            print(f"  ⚠️ Could not create group (maybe exists): {e}")
+
+        # Add standard (non-admin) users to the group
+        standard_users = [u for u in self.users.values() if not u.get('isAdmin')]
+        if not standard_users:
+            print("  ⚠️ No standard users found to add to group.")
+            return
+
+        for user in standard_users:
+            email = user['email']
+            account_id = user['accountId']
+            try:
+                print(f"  ➕ Adding {email} (accountId={account_id}) to group {self.group_name} ...")
+                self.client.add_user_to_group_by_name(self.group_name, account_id)
+                print(f"  ✅ Added {email} to group.")
+                time.sleep(0.5)
+            except Exception as e:
+                txt = str(e)
+                if '409' in txt or 'already exists' in txt.lower():
+                    print(f"  ⚠️ {email} already in group (or conflict).")
+                else:
+                    print(f"  ❌ Failed to add {email} to group: {e}")
+
+        print("✅ Group setup done.")
+
+    # small helper to add a single operation (ensures single "operation" payload)
+    def _add_single_operation_permission(self, space_key: str, account_id: str, op: Dict[str, str], subject_type: str = "user") -> bool:
+        """
+        Add one operation permission for subject_type:identifier.
+        Returns True on success, False if permission already existed (or error handled).
+        """
+        try:
+            # client.add_space_permission expects a list; using single-item list ensures "operation" JSON is used.
+            self.client.add_space_permission(space_key, subject_type, account_id, [op])
+            print(f"    ✅ Granted {op.get('key')}({op.get('target')}) to {account_id} on {space_key}")
+            return True
+        except Exception as e:
+            txt = str(e)
+            # handle "Permission already exists" and other readable messages gracefully
+            if 'Permission already exists' in txt or 'already exists' in txt:
+                print(f"    ⚠️ Permission already exists for {account_id} ({op.get('key')}). Skipping.")
+                return False
+            # surface read-before-other hint separately upstream
+            print(f"    ❌ Failed to grant {op.get('key')} to {account_id} on {space_key}: {e}")
+            return False
+
     def setup_spaces(self) -> None:
         """
-        Create spaces with proper permissions.
-        - Admin Space: Only administrators can view and edit
-        - Team Space: Group members can view and edit
-        - Public Space: All users can view, only administrators can edit
+        Create COLLAB and RESTRICT spaces (idempotent) and apply permissions:
+
+        - COLLAB:
+            * one standard user -> space administrator
+            * other 3 standard users -> read + write/create
+            * site admin keeps default (no change)
+        - RESTRICT:
+            * site admin -> space administrator
+            * all 4 standard users -> read-only
         """
-        print("🔧 Setting up spaces...")
-        
+        print("🔧 Creating spaces (COLLAB, RESTRICT)...")
         space_configs = [
-            {
-                'key': 'ADMIN',
-                'name': 'Administrator Space',
-                'description': 'Space restricted to administrators only'
-            },
-            {
-                'key': 'RESTRICTED',
-                'name': 'Restricted Workspace',
-                'description': 'Highly restricted workspace for sensitive information'
-            },
-            {
-                'key': 'COLLAB',
-                'name': 'Collaborative Workspace',
-                'description': 'Open collaborative workspace for team projects'
-            },
-            {
-                'key': 'TEAM',
-                'name': 'Team Space',
-                'description': 'Space for team collaboration'
-            },
-            {
-                'key': 'PUBLIC',
-                'name': 'Public Space',
-                'description': 'Public space with read access for all users'
-            }
+            {'key': 'COLLAB', 'name': 'Collaborative Workspace', 'description': 'Open collaborative workspace for team projects'},
+            {'key': 'RESTRICT', 'name': 'Restricted Workspace', 'description': 'Highly restricted workspace for sensitive information'}
         ]
-        
-        for config in space_configs:
+
+        for cfg in space_configs:
+            key = cfg['key']
             try:
-                print(f"  Creating space: {config['key']}")
-                space = self.client.create_space(
-                    space_key=config['key'],
-                    name=config['name'],
-                    description=config['description']
-                )
-                self.spaces[config['key']] = space
-                print(f"  ✅ Space {config['key']} created successfully")
-                
-                # Note: Space permissions must be set manually in Confluence admin console
-                print(f"  ⚠️ Note: Set space permissions manually for {config['key']} in Confluence admin console")
-                
-                time.sleep(1)  # Rate limiting
-                
+                print(f"  ➕ Creating space {key} ...")
+                space = self.client.create_space(space_key=key, name=cfg['name'], description=cfg['description'])
+                self.spaces[key] = space
+                print(f"  ✅ Space {key} created.")
             except Exception as e:
-                if "already exists" in str(e) or "Space keys must be unique" in str(e):
-                    print(f"  ⚠️ Space {config['key']} already exists - using existing space")
-                    # Try to get existing space
+                msg = str(e)
+                print(f"  ℹ️ Could not create space {key} (may exist or validation failed): {msg}")
+                # Try to find an existing space by listing spaces (fallback)
+                try:
+                    print("    🔎 Searching existing spaces for a match...")
+                    resp = self.client._make_request('GET', '/rest/api/space?limit=200')
+                    results = resp.get('results') if isinstance(resp, dict) else None
+                    found = None
+                    if isinstance(results, list):
+                        for s in results:
+                            sk = (s.get('key') or '').upper()
+                            if sk == key.upper():
+                                found = s
+                                break
+                            if (s.get('name') or '').lower() == (cfg['name'] or '').lower():
+                                found = s
+                                break
+                    if found:
+                        self.spaces[key] = found
+                        print(f"    ✅ Found existing space for {key} (using discovered space).")
+                    else:
+                        print(f"    ⚠️ No matching space found in list for key={key}; continuing.")
+                except Exception as ex:
+                    print(f"    ❌ Failed to list/search spaces: {ex}")
+            time.sleep(0.5)
+
+        # --- Apply permissions per spec ---
+        standard_users = [u for u in self.users.values() if not u.get('isAdmin')]
+        admin_user = next((u for u in self.users.values() if u.get('isAdmin')), None)
+
+        if not admin_user:
+            print("  ❌ No admin user available in mapping — cannot safely apply restrictive permissions.")
+        if len(standard_users) < 1:
+            print("  ❌ No standard users found — skipping permission assignments.")
+        else:
+            # Helper that ensures read exists first, then applies additional ops safely
+            def ensure_read_then_apply(space_key: str, subject_account: str, extra_ops: List[Dict[str, str]], subject_type: str = "user"):
+                # 1) ensure read
+                try:
+                    # add read (single op)
+                    read_op = {"key": "read", "target": "space"}
+                    if self._add_single_operation_permission(space_key, subject_account, read_op, subject_type):
+                        # read added now; continue with extra ops
+                        for op in extra_ops:
+                            # call single-operation-per-request to avoid server NPEs
+                            self._add_single_operation_permission(space_key, subject_account, op, subject_type)
+                    else:
+                        # read already existed or failed; still attempt extra ops but continue
+                        for op in extra_ops:
+                            self._add_single_operation_permission(space_key, subject_account, op, subject_type)
+                except Exception as e:
+                    print(f"    ❌ Error while ensuring read/extra ops for {subject_account} on {space_key}: {e}")
+
+            # COLLAB: pick first standard user as space admin, others as writers/readers
+            if 'COLLAB' in self.spaces:
+                collab_key = 'COLLAB'
+                space_admin = standard_users[0]
+                writers = standard_users[1:] if len(standard_users) > 1 else []
+                # ensure admin has read first, then administer
+                try:
+                    print(f"  ➕ Granting space-admin on {collab_key} to {space_admin['email']}")
+                    ensure_read_then_apply(collab_key, space_admin['accountId'], [{"key": "administer", "target": "space"}])
+                except Exception as e:
+                    print(f"    ❌ Failed to grant space admin: {e}")
+
+                # writers: give write + read (we ensure read first in helper)
+                for w in writers:
                     try:
-                        space = self.client.get_space(config['key'])
-                        self.spaces[config['key']] = space
-                        print(f"  ✅ Using existing space {config['key']}")
-                        # Note: Space permissions must be set manually in Confluence admin console
-                        print(f"  ⚠️ Note: Set space permissions manually for {config['key']} in Confluence admin console")
-                    except:
-                        print(f"  ❌ Could not access existing space {config['key']}")
-                else:
-                    print(f"  ❌ Failed to create space {config['key']}: {e}")
-        
-        print(f"✅ Space setup completed. Created {len(self.spaces)} spaces.")
-    
-    
+                        print(f"  ➕ Granting write/read on {collab_key} to {w['email']}")
+                        write_ops = [
+                            {"key": "create", "target": "page"},
+                            {"key": "create", "target": "blogpost"},
+                            {"key": "create", "target": "comment"},
+                            {"key": "create", "target": "attachment"},
+                            {"key": "delete", "target": "page"}
+                        ]
+                        ensure_read_then_apply(collab_key, w['accountId'], write_ops)
+                    except Exception as e:
+                        print(f"    ❌ Failed to grant write/read to {w['email']}: {e}")
+
+            # RESTRICT: only admin is space admin, all standard users get read-only
+            if 'RESTRICT' in self.spaces and admin_user:
+                restrict_key = 'RESTRICT'
+                try:
+                    print(f"  ➕ Granting space-admin on {restrict_key} to site admin {admin_user['email']}")
+                    ensure_read_then_apply(restrict_key, admin_user['accountId'], [{"key": "administer", "target": "space"}])
+                except Exception as e:
+                    print(f"    ❌ Failed to grant admin to site admin: {e}")
+
+                for u in standard_users:
+                    try:
+                        print(f"  ➕ Granting read-only on {restrict_key} to {u['email']}")
+                        # only read
+                        self._add_single_operation_permission(restrict_key, u['accountId'], {"key": "read", "target": "space"})
+                    except Exception as e:
+                        print(f"    ❌ Failed to grant read to {u['email']}: {e}")
+
+        print("⚠️ Note: This script applies basic space permissions but does not remove older/extra permissions.")
+
     def setup_content(self) -> None:
         """
-        Create pages and blog posts with proper permissions.
+        Create a page in COLLAB and restrict it (read) to admin + one standard user.
         """
-        print("🔧 Setting up content...")
-        
-        # Create pages in different spaces
-        page_configs = [
-            {
-                'space_key': 'ADMIN',
-                'title': 'Admin Documentation',
-                'content': '''
-                <h1>Administrator Documentation</h1>
-                <p>This page contains sensitive administrative information.</p>
-                <h2>System Configuration</h2>
-                <ul>
-                    <li>Database settings</li>
-                    <li>Security configurations</li>
-                    <li>User management procedures</li>
-                </ul>
-                ''',
-            },
-            {
-                'space_key': 'RESTRICTED',
-                'title': 'Confidential Information',
-                'content': '''
-                <h1>Confidential Information</h1>
-                <p>This workspace contains highly sensitive and confidential information.</p>
-                <h2>Security Protocols</h2>
-                <ul>
-                    <li>Access is strictly limited to authorized personnel</li>
-                    <li>All content is encrypted and protected</li>
-                    <li>Regular security audits are conducted</li>
-                </ul>
-                <h2>Compliance Requirements</h2>
-                <ul>
-                    <li>GDPR compliance documentation</li>
-                    <li>Security incident procedures</li>
-                    <li>Data retention policies</li>
-                </ul>
-                ''',
-            },
-            {
-                'space_key': 'COLLAB',
-                'title': 'Collaborative Project Hub',
-                'content': '''
-                <h1>Collaborative Project Hub</h1>
-                <p>Welcome to our open collaborative workspace! This space encourages innovation and teamwork.</p>
-                <h2>Project Management</h2>
-                <ul>
-                    <li>Active project tracking</li>
-                    <li>Team collaboration tools</li>
-                    <li>Real-time updates and notifications</li>
-                </ul>
-                <h2>Innovation Lab</h2>
-                <ul>
-                    <li>Brainstorming sessions</li>
-                    <li>Prototype development</li>
-                    <li>Knowledge sharing</li>
-                </ul>
-                ''',
-            },
-            {
-                'space_key': 'TEAM',
-                'title': 'Team Guidelines',
-                'content': '''
-                <h1>Team Guidelines</h1>
-                <p>Welcome to the team space! This document outlines our team's working guidelines.</p>
-                <h2>Communication</h2>
-                <ul>
-                    <li>Use clear and concise language</li>
-                    <li>Update documentation regularly</li>
-                    <li>Collaborate effectively</li>
-                </ul>
-                <h2>Best Practices</h2>
-                <ul>
-                    <li>Code review process</li>
-                    <li>Testing procedures</li>
-                    <li>Documentation standards</li>
-                </ul>
-                ''',
-            },
-            {
-                'space_key': 'PUBLIC',
-                'title': 'Welcome to Our Confluence Site',
-                'content': '''
-                <h1>Welcome to Our Confluence Site</h1>
-                <p>This is a public page accessible to all users.</p>
-                <h2>Getting Started</h2>
-                <p>Here you can find general information about our organization and resources.</p>
-                <h2>Resources</h2>
-                <ul>
-                    <li>Company policies</li>
-                    <li>General announcements</li>
-                    <li>Contact information</li>
-                </ul>
-                ''',
-            }
-        ]
-        
-        # Create pages
-        for config in page_configs:
-            try:
-                print(f"  Creating page: {config['title']} in space {config['space_key']}")
-                page = self.client.create_page(
-                    space_key=config['space_key'],
-                    title=config['title'],
-                    content=config['content']
-                )
-                self.content[config['title']] = page
-                print(f"  ✅ Page '{config['title']}' created successfully")
-                
-                # Note: Content permissions must be set manually in Confluence
-                print(f"  ⚠️ Note: Set content permissions manually for '{config['title']}' in Confluence")
-                
-                time.sleep(1)  # Rate limiting
-                
-            except Exception as e:
-                if "already exists" in str(e) or "same TITLE" in str(e):
-                    print(f"  ⚠️ Page '{config['title']}' already exists - skipping")
-                else:
-                    print(f"  ❌ Failed to create page '{config['title']}': {e}")
-        
-        # Create blog posts
-        blog_configs = [
-            {
-                'space_key': 'RESTRICTED',
-                'title': 'Security Alert - System Maintenance',
-                'content': '''
-                <h1>Security Alert - System Maintenance</h1>
-                <p>This is a confidential security update for authorized personnel only.</p>
-                <h2>Security Updates</h2>
-                <ul>
-                    <li>Critical security patches applied</li>
-                    <li>Access logs reviewed and analyzed</li>
-                    <li>New security protocols implemented</li>
-                </ul>
-                <h2>Action Required</h2>
-                <ul>
-                    <li>All users must update their passwords</li>
-                    <li>Two-factor authentication is now mandatory</li>
-                    <li>Regular security training sessions scheduled</li>
-                </ul>
-                ''',
-            },
-            {
-                'space_key': 'COLLAB',
-                'title': 'Innovation Spotlight - New Ideas',
-                'content': '''
-                <h1>Innovation Spotlight - New Ideas</h1>
-                <p>Sharing exciting new ideas and innovations from our collaborative workspace!</p>
-                <h2>Featured Innovations</h2>
-                <ul>
-                    <li>AI-powered automation tools</li>
-                    <li>Enhanced user experience designs</li>
-                    <li>Sustainable technology solutions</li>
-                </ul>
-                <h2>Collaboration Opportunities</h2>
-                <ul>
-                    <li>Cross-team project initiatives</li>
-                    <li>Knowledge sharing sessions</li>
-                    <li>Innovation workshops</li>
-                </ul>
-                ''',
-            },
-            {
-                'space_key': 'TEAM',
-                'title': 'Team Update - Project Status',
-                'content': '''
-                <h1>Project Status Update</h1>
-                <p>Here's the latest update on our current project status.</p>
-                <h2>Completed Tasks</h2>
-                <ul>
-                    <li>User authentication setup</li>
-                    <li>Database configuration</li>
-                    <li>API integration</li>
-                </ul>
-                <h2>Next Steps</h2>
-                <ul>
-                    <li>Testing and validation</li>
-                    <li>Documentation updates</li>
-                    <li>Deployment preparation</li>
-                </ul>
-                ''',
-            },
-            {
-                'space_key': 'PUBLIC',
-                'title': 'Company News - Q1 Updates',
-                'content': '''
-                <h1>Q1 Company Updates</h1>
-                <p>Welcome to our quarterly company updates!</p>
-                <h2>Key Achievements</h2>
-                <ul>
-                    <li>Successful product launch</li>
-                    <li>Team expansion</li>
-                    <li>Customer satisfaction improvements</li>
-                </ul>
-                <h2>Looking Ahead</h2>
-                <p>We're excited about the upcoming quarter and the new initiatives we'll be launching.</p>
-                ''',
-            }
-        ]
-        
-        # Create blog posts
-        for config in blog_configs:
-            try:
-                print(f"  Creating blog post: {config['title']} in space {config['space_key']}")
-                blog_post = self.client.create_blog_post(
-                    space_key=config['space_key'],
-                    title=config['title'],
-                    content=config['content']
-                )
-                self.content[config['title']] = blog_post
-                print(f"  ✅ Blog post '{config['title']}' created successfully")
-                
-                # Note: Content permissions must be set manually in Confluence
-                print(f"  ⚠️ Note: Set content permissions manually for '{config['title']}' in Confluence")
-                
-                time.sleep(1)  # Rate limiting
-                
-            except Exception as e:
-                if "already exists" in str(e) or "same TITLE" in str(e):
-                    print(f"  ⚠️ Blog post '{config['title']}' already exists - skipping")
-                else:
-                    print(f"  ❌ Failed to create blog post '{config['title']}': {e}")
-        
-        print(f"✅ Content setup completed. Created {len(self.content)} content items.")
-    
-    
-    def run_setup(self) -> None:
-        """Run the complete Confluence setup process."""
-        print("🚀 Starting Confluence Cloud setup...")
-        print("=" * 50)
-        
+        print("🔧 Creating content in COLLAB...")
+        if 'COLLAB' not in self.spaces:
+            print("  ❌ COLLAB space not present — skipping content creation.")
+            return
+
+        title = "Project Kickoff: Collaboration Page"
+        html = '''
+        <h1>Project Kickoff</h1>
+        <p>Welcome to the collaborative workspace for our new project. Here you'll find all the resources and updates you need.</p>
+        <h2>Team Goals</h2>
+        <ul>
+            <li>Foster open communication</li>
+            <li>Share progress transparently</li>
+            <li>Encourage innovation</li>
+        </ul>
+        <h2>Embedded Image</h2>
+        <p><img src="https://upload.wikimedia.org/wikipedia/commons/4/47/PNG_transparency_demonstration_1.png" alt="Demo Image" width="300" /></p>
+        '''
+
         try:
-            # Execute setup steps in order
+            page = self.client.create_page(space_key='COLLAB', title=title, content=html)
+            self.content[title] = page
+            content_id = page.get('id')
+            print(f"  ✅ Page created: '{title}' id={content_id}")
+        except Exception as e:
+            print(f"  ❌ Failed to create page: {e}")
+            return
+
+        # Choose a standard user to grant access to (first non-admin), and ensure admin remains
+        standard_users = [u for u in self.users.values() if not u.get('isAdmin')]
+        admin_user = next((u for u in self.users.values() if u.get('isAdmin')), None)
+        if not standard_users:
+            print("  ⚠️ No standard users to pick for restriction. Skipping restrictions.")
+            return
+        if not admin_user:
+            print("  ⚠️ No admin user available in mapping — skipping restrictions to avoid evicting caller.")
+            return
+
+        target = standard_users[0]
+        try:
+            print(f"  🔒 Applying read restriction for admin ({admin_user['email']})")
+            self.client.add_content_restriction(content_id=content_id, operation='read', account_id=admin_user['accountId'])
+            time.sleep(0.3)
+            print(f"  🔒 Applying read restriction for target user ({target['email']})")
+            self.client.add_content_restriction(content_id=content_id, operation='read', account_id=target['accountId'])
+            print(f"  ✅ Content restricted to: {admin_user['email']} and {target['email']}")
+        except Exception as e:
+            print(f"  ❌ Failed to apply content restriction: {e}")
+
+    def run_setup(self) -> None:
+        print("🚀 Starting Confluence minimal setup")
+        print("=" * 50)
+        try:
             self.setup_users()
             print()
-            
             self.setup_groups()
             print()
-            
             self.setup_spaces()
             print()
-            
             self.setup_content()
             print()
-            
-            # Summary
-            print("🎉 Setup completed successfully!")
-            print("=" * 50)
-            print(f"✅ Created {len(self.users)} users")
-            print(f"✅ Created 1 group: {self.group_name}")
-            print(f"✅ Created {len(self.spaces)} spaces")
-            print(f"✅ Created {len(self.content)} content items")
-            print()
-            print("📋 Summary:")
-            print(f"  - Users: {list(self.users.keys())}")
+            print("🎉 Setup finished. Summary:")
+            print(f"  - Users loaded: {len(self.users)}")
             print(f"  - Group: {self.group_name}")
             print(f"  - Spaces: {list(self.spaces.keys())}")
             print(f"  - Content: {list(self.content.keys())}")
-            
         except Exception as e:
             print(f"❌ Setup failed: {e}")
             raise
 
 
 def main():
-    """Main function to run the Confluence setup."""
     try:
-        setup = ConfluenceSetup()
-        setup.run_setup()
+        s = ConfluenceSetup()
+        s.run_setup()
     except Exception as e:
         print(f"❌ Application failed: {e}")
         return 1
-    
     return 0
 
 
